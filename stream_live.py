@@ -29,8 +29,9 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.patches import Circle
+from matplotlib.patches import Circle, Rectangle
 import requests
+from scipy.io import wavfile
 
 # ---------------- Config ----------------
 WIDTH, HEIGHT = 1024, 576   # trimmed from 1280x720 for real-time headroom
@@ -318,6 +319,54 @@ data_text_obj = ax.text(-10.6, 5.0, "", color="#7fd8ff", fontsize=10,
 fact_text_obj = ax.text(0, -4.6, "", color="#ffd27f", fontsize=10,
                          family="monospace", va="top", ha="center", wrap=True)
 
+# ---------------- Audio-reactive visualizer ----------------
+# Lets viewers *see* the ambient soundtrack, not just hear it — a small bar
+# visualizer driven by the actual audio samples playing at that moment.
+N_BARS = 24
+VIS_BASELINE_Y = -5.75
+VIS_MAX_HEIGHT = 0.55
+bar_x = np.linspace(-4.2, 4.2, N_BARS)
+bar_width = (8.4 / N_BARS) * 0.7
+bar_patches = []
+for bx in bar_x:
+    rect = Rectangle((bx - bar_width / 2, VIS_BASELINE_Y), bar_width, 0.01,
+                      color="#7fd8ff", alpha=0.85, zorder=8)
+    ax.add_patch(rect)
+    bar_patches.append(rect)
+ax.text(0, VIS_BASELINE_Y - 0.25, "LIVE AUDIO", color="#7fd8ff", fontsize=7,
+        family="monospace", ha="center", zorder=8, alpha=0.6)
+
+# Audio data + smoothing state, populated in main() once the ambient wav
+# exists. bar_smooth persists across frames for less jittery motion.
+audio_samples = None   # mono float array, set in main()
+audio_sr = 44100
+audio_duration = None
+bar_smooth = np.zeros(N_BARS)
+FFT_WINDOW = 2048
+BAND_EDGES = np.logspace(np.log10(30), np.log10(6000), N_BARS + 1)
+
+
+def compute_bar_heights(frame_idx):
+    """Read the audio samples that correspond to this video frame's timestamp
+    and turn them into N_BARS smoothed frequency-band heights."""
+    global bar_smooth
+    if audio_samples is None:
+        return bar_smooth  # no audio loaded yet — keep bars flat
+    t_sec = (frame_idx / FPS) % audio_duration
+    start = int(t_sec * audio_sr)
+    idx = (start + np.arange(FFT_WINDOW)) % len(audio_samples)
+    segment = audio_samples[idx] * np.hanning(FFT_WINDOW)
+    mag = np.abs(np.fft.rfft(segment))
+    freqs = np.fft.rfftfreq(FFT_WINDOW, d=1 / audio_sr)
+    raw = np.zeros(N_BARS)
+    for i in range(N_BARS):
+        mask = (freqs >= BAND_EDGES[i]) & (freqs < BAND_EDGES[i + 1])
+        raw[i] = mag[mask].mean() if mask.any() else 0.0
+    raw = np.log1p(raw)
+    raw = raw / (raw.max() + 1e-9) * VIS_MAX_HEIGHT
+    bar_smooth = 0.65 * bar_smooth + 0.35 * raw
+    return bar_smooth
+
 
 # --- One-time setup for blitting ---
 # Everything static (starfield, nebula, galaxy, star cluster, asteroid field,
@@ -332,6 +381,7 @@ DYNAMIC_ARTISTS = [
     planet_dot, planet_ring, planet_label,
     comet_head, comet_tail, comet_label,
     chat_text_obj, data_text_obj, fact_text_obj,
+    *bar_patches,
 ]
 for artist in DYNAMIC_ARTISTS:
     artist.set_animated(True)
@@ -426,6 +476,13 @@ def render_frame(frame_idx):
     fact_idx = (frame_idx // (FPS * FACT_INTERVAL_SEC)) % len(BLACK_HOLE_FACTS)
     fact_text_obj.set_text(f"DID YOU KNOW? {BLACK_HOLE_FACTS[fact_idx]}")
 
+    # Audio-reactive bars: read the audio playing at this frame's timestamp
+    # and update each bar's height so viewers can see the sound, not just
+    # hear it.
+    heights = compute_bar_heights(frame_idx)
+    for rect, h in zip(bar_patches, heights):
+        rect.set_height(max(h, 0.01))
+
     # --- Blit only the artists that actually changed this frame instead of
     # redrawing the whole canvas (starfield, nebula, galaxy, cluster, etc.
     # stay cached in `background` since they never move). This is the fix
@@ -444,6 +501,8 @@ def render_frame(frame_idx):
 
 # ---------------- Main ----------------
 def main():
+    global audio_samples, audio_sr, audio_duration
+
     threading.Thread(target=poll_chat, daemon=True).start()
     threading.Thread(target=poll_space_data, daemon=True).start()
 
@@ -454,6 +513,15 @@ def main():
     if not os.path.exists(ambient_path):
         from generate_space_ambient import generate as generate_ambient
         generate_ambient(path=ambient_path)
+
+    # Load the same audio into memory so the visualizer can read the exact
+    # samples that ffmpeg is playing at any given moment (see compute_bar_heights).
+    sr, data = wavfile.read(ambient_path)
+    mono = data.astype(np.float32).mean(axis=1) if data.ndim > 1 else data.astype(np.float32)
+    mono /= np.max(np.abs(mono)) + 1e-9
+    audio_samples = mono
+    audio_sr = sr
+    audio_duration = len(mono) / sr
 
     ffmpeg_cmd = [
         "ffmpeg", "-y",
