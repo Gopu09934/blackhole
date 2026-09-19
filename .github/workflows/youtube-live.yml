@@ -1,0 +1,53 @@
+# .github/workflows/youtube-live.yml
+#
+# Runs stream_live.py, which renders frames in real time and pushes them to
+# YouTube Live, with live chat messages and real space data burned into the
+# video as it streams.
+#
+# SETUP:
+# 1. Create your live broadcast in YouTube Studio > Go Live > Stream.
+#    Copy its Stream Key AND its Video ID (the string in the studio URL,
+#    e.g. studio.youtube.com/video/<VIDEO_ID>/livestreaming).
+# 2. Get a YouTube Data API v3 key: console.cloud.google.com > APIs & Services
+#    > Credentials > Create API Key (enable "YouTube Data API v3" first).
+# 3. (Optional) Get a free NASA API key at api.nasa.gov for higher rate limits
+#    on the asteroid-count stat. Without it, DEMO_KEY is used (very low quota).
+# 4. Add these as repo secrets (Settings > Secrets and variables > Actions):
+#      YOUTUBE_STREAM_KEY
+#      YOUTUBE_API_KEY
+#      YOUTUBE_VIDEO_ID
+#      NASA_API_KEY   (optional)
+# 5. Commit stream_live.py at the repo root (or update the path below).
+
+name: YouTube Live - Black Hole Stream (reactive)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 18 * * *"   # optional daily auto-start — edit/remove as needed
+
+jobs:
+  stream:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350   # stay under GitHub Actions' 6-hour hard cap
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          pip install numpy matplotlib requests google-api-python-client scipy
+
+      - name: Generate ambient soundtrack (synthesized, no copyrighted audio)
+        run: python generate_space_ambient.py
+
+      - name: Stream live with chat + data overlays
+        env:
+          YOUTUBE_STREAM_KEY: ${{ secrets.YOUTUBE_STREAM_KEY }}
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          YOUTUBE_VIDEO_ID: ${{ secrets.YOUTUBE_VIDEO_ID }}
+          NASA_API_KEY: ${{ secrets.NASA_API_KEY }}
+        run: python stream_live.py

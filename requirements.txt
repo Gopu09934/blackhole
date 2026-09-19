@@ -1,0 +1,5 @@
+numpy
+matplotlib
+requests
+google-api-python-client
+scipy
