@@ -24,7 +24,7 @@ name: YouTube Live - Black Hole Stream (reactive)
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 18 * * *"   # optional daily auto-start — edit/remove as needed
+    - cron: "0 */5 * * *"
 
 jobs:
   stream:
